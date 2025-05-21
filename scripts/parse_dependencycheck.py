@@ -9,10 +9,10 @@ def parse_dependency_check_xml(xml_path):
         print(f"Error reading XML file: {e}")
         return
 
-    # Register namespace based on XML file
-    ns = {'ns': 'https://jeremylong.github.io/DependencyCheck/dependency-check.2.5.xsd'}
+    # Dependency-Check XML namespace (usually present, adjust if necessary)
+    ns = {'ns': 'http://jeremylong.github.io/DependencyCheck/dependency-check.1.0.xsd'}
 
-    # Initialize severity counters
+    # Counters for vulnerabilities
     severity_counts = {
         'Critical': 0,
         'High': 0,
@@ -21,13 +21,19 @@ def parse_dependency_check_xml(xml_path):
         'Unknown': 0
     }
 
-    # Find all vulnerability elements using namespace-aware XPath
-    for vulnerability in root.findall('.//ns:vulnerabilities/ns:vulnerability', ns):
-        severity_elem = vulnerability.find('ns:severity', ns)
-        if severity_elem is not None and severity_elem.text:
-            sev_text = severity_elem.text.strip()
-            if sev_text in severity_counts:
-                severity_counts[sev_text] += 1
+    # Loop through all vulnerabilities in the report
+    for vulnerability in root.findall('.//ns:vulnerability', ns):
+        severity = vulnerability.find('ns:severity', ns)
+        if severity is not None:
+            sev_text = severity.text.lower()  # Normalize to lowercase
+            if sev_text == 'critical':
+                severity_counts['Critical'] += 1
+            elif sev_text == 'high':
+                severity_counts['High'] += 1
+            elif sev_text == 'medium':
+                severity_counts['Medium'] += 1
+            elif sev_text == 'low':
+                severity_counts['Low'] += 1
             else:
                 severity_counts['Unknown'] += 1
         else:
