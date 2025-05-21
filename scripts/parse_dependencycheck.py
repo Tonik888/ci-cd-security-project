@@ -1,63 +1,47 @@
-#!/usr/bin/env python3
-import json
 import sys
+import xml.etree.ElementTree as ET
 
-def main():
-    if len(sys.argv) != 2:
-        print("Usage: parse_dependencycheck.py <dependency-check-report.json>", file=sys.stderr)
-        sys.exit(1)
-
-    report_path = sys.argv[1]
-
+def parse_dependency_check_xml(xml_path):
     try:
-        with open(report_path, 'r') as f:
-            data = json.load(f)
+        tree = ET.parse(xml_path)
+        root = tree.getroot()
     except Exception as e:
-        print(f"Error reading JSON file '{report_path}': {e}", file=sys.stderr)
-        sys.exit(1)
+        print(f"Error reading XML file: {e}")
+        return
 
-    vulnerabilities = data.get('dependencies', [])
-    total_vulns = 0
-    severity_count = {
+    # Dependency-Check XML namespace (usually present, adjust if necessary)
+    ns = {'ns': 'http://jeremylong.github.io/DependencyCheck/dependency-check.1.0.xsd'}
+
+    # Counters for vulnerabilities
+    severity_counts = {
         'Critical': 0,
         'High': 0,
         'Medium': 0,
         'Low': 0,
-        'Info': 0
+        'Unknown': 0
     }
 
-    print("="*60)
-    print(f"Dependency-Check Vulnerability Report Summary")
-    print("="*60)
-    print(f"Total dependencies scanned: {len(vulnerabilities)}\n")
+    # The vulnerabilities are inside /analysis/dependencies/dependency/vulnerabilities/vulnerability
+    for vulnerability in root.findall('.//ns:vulnerability', ns):
+        severity = vulnerability.find('ns:severity', ns)
+        if severity is not None:
+            sev_text = severity.text
+            if sev_text in severity_counts:
+                severity_counts[sev_text] += 1
+            else:
+                severity_counts['Unknown'] += 1
+        else:
+            severity_counts['Unknown'] += 1
 
-    for dep in vulnerabilities:
-        vulns = dep.get('vulnerabilities', [])
-        if not vulns:
-            continue
-
-        print(f"Dependency: {dep.get('fileName', 'Unknown')}")
-        for vuln in vulns:
-            total_vulns += 1
-            severity = vuln.get('severity', 'Unknown').capitalize()
-            severity_count[severity] = severity_count.get(severity, 0) + 1
-
-            cve = vuln.get('name', 'N/A')
-            description = vuln.get('description', '').strip().replace('\n', ' ')
-            url = vuln.get('references', [{}])[0].get('url', 'N/A')
-
-            print(f"  - [{severity}] {cve}")
-            print(f"      Description: {description[:200]}{'...' if len(description) > 200 else ''}")
-            print(f"      More info: {url}")
-        print("")
-
-    print("="*60)
-    print(f"Total vulnerabilities found: {total_vulns}")
-    print("Severity breakdown:")
-    for level in ['Critical', 'High', 'Medium', 'Low', 'Info']:
-        print(f"  {level}: {severity_count.get(level, 0)}")
-    print("="*60)
-
+    # Print summary report
+    print("Dependency-Check Vulnerability Summary:")
+    total_vulns = sum(severity_counts.values())
+    print(f"  Total Vulnerabilities: {total_vulns}")
+    for sev, count in severity_counts.items():
+        print(f"  {sev}: {count}")
 
 if __name__ == "__main__":
-    main()
+    if len(sys.argv) != 2:
+        print("Usage: python3 parse_dependencycheck.py <dependency-check-report.xml>")
+        sys.exit(1)
+    parse_dependency_check_xml(sys.argv[1])
