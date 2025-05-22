@@ -10,20 +10,27 @@ def load_json(file_path):
 def parse_dependency_check_xml(file_path):
     tree = ET.parse(file_path)
     root = tree.getroot()
+    ns = {'ns': 'https://jeremylong.github.io/DependencyCheck/dependency-check.2.5.xsd'}
+
     prompt = "\nDependency-Check Findings:\n"
     count = 0
-    for vuln in root.findall(".//vulnerability"):
-        name = vuln.findtext("name", "Unknown")
-        severity = vuln.findtext("severity", "Unknown")
-        description = vuln.findtext("description", "")[:150].replace('\n', ' ')
-        prompt += f"- Severity: {severity}, Name: {name}, Description: {description}...\n"
-        count += 1
-        if count >= 10:
-            break
+
+    for dependency in root.findall(".//ns:dependency", ns):
+        package = dependency.findtext("ns:fileName", default="Unknown", namespaces=ns)
+        for vuln in dependency.findall("ns:vulnerabilities/ns:vulnerability", ns):
+            name = vuln.findtext("ns:name", "Unknown", namespaces=ns)
+            severity = vuln.findtext("ns:severity", "Unknown", namespaces=ns)
+            description = vuln.findtext("ns:description", "", namespaces=ns).replace('\n', ' ')[:120]
+            prompt += f"- Package: {package}, Severity: {severity}, CVE: {name}, Description: {description}...\n"
+            count += 1
+            if count >= 10:
+                return prompt
+    if count == 0:
+        prompt += "No vulnerabilities found in Dependency-Check report.\n"
     return prompt
 
 def build_prompt(sonar_data, trivy_data, depcheck_text):
-    prompt = "Analyze the following security and code quality issues and provide practical, prioritized recommendations:\n\n"
+    prompt = "Based on the following security and code quality issues, provide prioritized recommendations:\n\n"
 
     prompt += "SonarQube Issues:\n"
     issues = sonar_data.get('issues', [])
@@ -47,7 +54,7 @@ def build_prompt(sonar_data, trivy_data, depcheck_text):
             break
 
     prompt += depcheck_text
-    prompt += "\nPlease provide concise, prioritized mitigation strategies and development best practices."
+    prompt += "\n\nPlease provide concise, prioritized mitigation strategies and development best practices."
     return prompt
 
 def main():
@@ -60,19 +67,19 @@ def main():
     depcheck_file = sys.argv[3]
     openai_api_key = sys.argv[4]
 
-    # Load reports
+    # Load data
     sonar_data = load_json(sonar_file)
     trivy_data = load_json(trivy_file)
     depcheck_text = parse_dependency_check_xml(depcheck_file)
+
+    # Build prompt and call OpenAI
     prompt = build_prompt(sonar_data, trivy_data, depcheck_text)
 
-    # Call OpenAI (new SDK)
     client = OpenAI(api_key=openai_api_key)
-
     response = client.chat.completions.create(
         model="gpt-3.5-turbo",
         messages=[{"role": "user", "content": prompt}],
-        max_tokens=300,
+        max_tokens=600,
         temperature=0.7,
     )
 
