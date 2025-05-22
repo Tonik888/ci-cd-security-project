@@ -20,7 +20,7 @@ def parse_dependency_check_xml(file_path):
             cve = vuln.findtext("ns:name", "N/A", namespaces=ns)
             severity = vuln.findtext("ns:severity", "Unknown", namespaces=ns)
             desc = vuln.findtext("ns:description", "", namespaces=ns).replace('\n', ' ').strip()
-            result += f"- [{severity}] {package}, CVE: {cve}: {desc[:100]}...\n"
+            result += f"- Package: {package}, Severity: {severity}, CVE: {cve}, Description: {desc[:100]}...\n"
             count += 1
             if count >= 10:
                 return result
@@ -33,9 +33,9 @@ You will receive security and quality reports from SonarQube, Trivy, and OWASP D
 Your task is to analyze the issues and provide **specific, prioritized, actionable recommendations**, grouped by tool.
 
 Output format:
-1. Trivy Vulnerabilities (list by package & CVE ID)
+1. Trivy Vulnerabilities (list by package, CVE ID, and severity)
 2. SonarQube Issues (list exact messages and file/components)
-3. Dependency-Check Issues (list packages, CVE ID, severity)
+3. Dependency-Check Issues (list packages, CVE ID, and severity)
 4. Development Best Practices
 
 ---
@@ -88,7 +88,7 @@ def main():
     response = client.chat.completions.create(
         model="gpt-3.5-turbo",
         messages=[{"role": "user", "content": prompt}],
-        max_tokens=600,
+        max_tokens=800,
         temperature=0.7,
     )
 
