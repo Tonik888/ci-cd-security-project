@@ -1,7 +1,7 @@
 import sys
 import json
-import openai
 import xml.etree.ElementTree as ET
+from openai import OpenAI
 
 def load_json(file_path):
     with open(file_path, 'r') as f:
@@ -23,7 +23,7 @@ def parse_dependency_check_xml(file_path):
     return prompt
 
 def build_prompt(sonar_data, trivy_data, depcheck_text):
-    prompt = "Analyze the following software security and quality issues and provide practical, prioritized recommendations:\n\n"
+    prompt = "Analyze the following security and code quality issues and provide practical, prioritized recommendations:\n\n"
 
     prompt += "SonarQube Issues:\n"
     issues = sonar_data.get('issues', [])
@@ -47,7 +47,7 @@ def build_prompt(sonar_data, trivy_data, depcheck_text):
             break
 
     prompt += depcheck_text
-    prompt += "\nPlease provide mitigation strategies, refactoring suggestions, or configuration improvements where applicable."
+    prompt += "\nPlease provide concise, prioritized mitigation strategies and development best practices."
     return prompt
 
 def main():
@@ -60,15 +60,16 @@ def main():
     depcheck_file = sys.argv[3]
     openai_api_key = sys.argv[4]
 
+    # Load reports
     sonar_data = load_json(sonar_file)
     trivy_data = load_json(trivy_file)
     depcheck_text = parse_dependency_check_xml(depcheck_file)
-
     prompt = build_prompt(sonar_data, trivy_data, depcheck_text)
 
-    openai.api_key = openai_api_key
+    # Call OpenAI (new SDK)
+    client = OpenAI(api_key=openai_api_key)
 
-    response = openai.ChatCompletion.create(
+    response = client.chat.completions.create(
         model="gpt-3.5-turbo",
         messages=[{"role": "user", "content": prompt}],
         max_tokens=300,
@@ -76,7 +77,7 @@ def main():
     )
 
     recommendation = response.choices[0].message.content
-    print("=== OpenAI GPT-3.5 Turbo Recommendations ===\n")
+    print("=== OpenAI GPT-3.5 Recommendations ===\n")
     print(recommendation)
 
 if __name__ == "__main__":
