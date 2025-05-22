@@ -12,60 +12,71 @@ def parse_dependency_check_xml(file_path):
     root = tree.getroot()
     ns = {'ns': 'https://jeremylong.github.io/DependencyCheck/dependency-check.2.5.xsd'}
 
-    result = ""
-    count = 0
+    findings = []
     for dependency in root.findall(".//ns:dependency", ns):
         package = dependency.findtext("ns:fileName", default="Unknown", namespaces=ns)
         for vuln in dependency.findall("ns:vulnerabilities/ns:vulnerability", ns):
             cve = vuln.findtext("ns:name", "N/A", namespaces=ns)
-            severity = vuln.findtext("ns:severity", "Unknown", namespaces=ns)
-            desc = vuln.findtext("ns:description", "", namespaces=ns).replace('\n', ' ').strip()
-            result += f"- Package: {package}, Severity: {severity}, CVE: {cve}, Description: {desc[:100]}...\n"
-            count += 1
-            if count >= 10:
-                return result
-    return result if result else "No known vulnerabilities found in dependencies.\n"
+            severity = vuln.findtext("ns:severity", "Unknown", namespaces=ns).upper()
+            recommendation = vuln.findtext("ns:recommendation", "", namespaces=ns).strip()
+            if not recommendation:
+                recommendation = f"Please update {package} to a patched version to mitigate {cve}."
+            findings.append({
+                "package": package,
+                "cve": cve,
+                "severity": severity,
+                "recommendation": recommendation
+            })
+    return findings
 
-def build_prompt(sonar_data, trivy_data, depcheck_text):
+def build_prompt(sonar_data, trivy_data, depcheck_findings):
     prompt = """You are a security assistant.
 
 You will receive security and quality reports from SonarQube, Trivy, and OWASP Dependency-Check.
-Your task is to analyze the issues and provide **specific, prioritized, actionable recommendations**, grouped by tool.
+Your task is to analyze the issues and provide clear, structured, prioritized recommendations in this format:
 
-Output format:
-1. Trivy Vulnerabilities (list by package, CVE ID, and severity)
-2. SonarQube Issues (list exact messages and file/components)
-3. Dependency-Check Issues (list packages, CVE ID, and severity)
-4. Development Best Practices
+1. Trivy Vulnerabilities:
+   - Package: <name>, CVE ID: <id>, Severity: <level>
+     Recommendation: <text>
+
+2. SonarQube Issues:
+   - File: <path>, Message: <issue>
+     Recommendation: <fix>
+
+3. Dependency-Check Issues:
+   - Package: <name>, CVE: <id>, Severity: <level>
+     Recommendation: <fix>
 
 ---
 
-SonarQube Issues:\n"""
+"""
 
-    issues = sonar_data.get('issues', [])
-    if not issues:
-        prompt += "No issues found.\n"
-    else:
-        for issue in issues[:10]:
-            prompt += f"- Severity: {issue.get('severity')}, Type: {issue.get('type')}, File: {issue.get('component')}, Message: {issue.get('message')}\n"
-
-    prompt += "\nTrivy Vulnerabilities:\n"
+    # SonarQube
+    prompt += "1. Trivy Vulnerabilities:\n"
     vulnerabilities = trivy_data.get('Results', [])
     count = 0
     for target in vulnerabilities:
-        vulns = target.get('Vulnerabilities', [])
-        for vuln in vulns[:5]:
-            prompt += f"- Severity: {vuln.get('Severity')}, Package: {vuln.get('PkgName')}, VulnerabilityID: {vuln.get('VulnerabilityID')}, Description: {vuln.get('Description')[:100]}...\n"
+        for vuln in target.get('Vulnerabilities', []):
+            prompt += f"   - Package: {vuln.get('PkgName')}, CVE ID: {vuln.get('VulnerabilityID')}, Severity: {vuln.get('Severity')}\n"
+            prompt += f"     Recommendation: {vuln.get('Description')[:150]}...\n"
             count += 1
-            if count >= 10:
+            if count >= 5:
                 break
-        if count >= 10:
+        if count >= 5:
             break
 
-    prompt += "\nDependency-Check Vulnerabilities:\n"
-    prompt += depcheck_text
+    prompt += "\n2. SonarQube Issues:\n"
+    issues = sonar_data.get('issues', [])
+    for issue in issues[:5]:
+        prompt += f"   - File: {issue.get('component')}, Message: {issue.get('message')}\n"
+        prompt += f"     Recommendation: Fix the issue type {issue.get('type')} with severity {issue.get('severity')}.\n"
 
-    prompt += "\n\nPlease respond in the format described above with clear and tool-specific recommendations."
+    prompt += "\n3. Dependency-Check Issues:\n"
+    for finding in depcheck_findings[:5]:
+        prompt += f"   - Package: {finding['package']}, CVE: {finding['cve']}, Severity: {finding['severity']}\n"
+        prompt += f"     Recommendation: {finding['recommendation']}\n"
+
+    prompt += "\nPlease prioritize by severity and practicality."
     return prompt
 
 def main():
@@ -80,15 +91,15 @@ def main():
 
     sonar_data = load_json(sonar_file)
     trivy_data = load_json(trivy_file)
-    depcheck_text = parse_dependency_check_xml(depcheck_file)
+    depcheck_findings = parse_dependency_check_xml(depcheck_file)
 
-    prompt = build_prompt(sonar_data, trivy_data, depcheck_text)
+    prompt = build_prompt(sonar_data, trivy_data, depcheck_findings)
 
     client = OpenAI(api_key=openai_api_key)
     response = client.chat.completions.create(
         model="gpt-3.5-turbo",
         messages=[{"role": "user", "content": prompt}],
-        max_tokens=800,
+        max_tokens=1000,
         temperature=0.7,
     )
 
