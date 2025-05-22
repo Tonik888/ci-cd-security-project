@@ -12,27 +12,36 @@ def parse_dependency_check_xml(file_path):
     root = tree.getroot()
     ns = {'ns': 'https://jeremylong.github.io/DependencyCheck/dependency-check.2.5.xsd'}
 
-    prompt = "\nDependency-Check Findings:\n"
+    result = ""
     count = 0
-
     for dependency in root.findall(".//ns:dependency", ns):
         package = dependency.findtext("ns:fileName", default="Unknown", namespaces=ns)
         for vuln in dependency.findall("ns:vulnerabilities/ns:vulnerability", ns):
-            name = vuln.findtext("ns:name", "Unknown", namespaces=ns)
+            cve = vuln.findtext("ns:name", "N/A", namespaces=ns)
             severity = vuln.findtext("ns:severity", "Unknown", namespaces=ns)
-            description = vuln.findtext("ns:description", "", namespaces=ns).replace('\n', ' ')[:120]
-            prompt += f"- Package: {package}, Severity: {severity}, CVE: {name}, Description: {description}...\n"
+            desc = vuln.findtext("ns:description", "", namespaces=ns).replace('\n', ' ').strip()
+            result += f"- [{severity}] {package}, CVE: {cve}: {desc[:100]}...\n"
             count += 1
             if count >= 10:
-                return prompt
-    if count == 0:
-        prompt += "No vulnerabilities found in Dependency-Check report.\n"
-    return prompt
+                return result
+    return result if result else "No known vulnerabilities found in dependencies.\n"
 
 def build_prompt(sonar_data, trivy_data, depcheck_text):
-    prompt = "Based on the following security and code quality issues, provide prioritized recommendations:\n\n"
+    prompt = """You are a security assistant.
 
-    prompt += "SonarQube Issues:\n"
+You will receive security and quality reports from SonarQube, Trivy, and OWASP Dependency-Check.
+Your task is to analyze the issues and provide **specific, prioritized, actionable recommendations**, grouped by tool.
+
+Output format:
+1. Trivy Vulnerabilities (list by package & CVE ID)
+2. SonarQube Issues (list exact messages and file/components)
+3. Dependency-Check Issues (list packages, CVE ID, severity)
+4. Development Best Practices
+
+---
+
+SonarQube Issues:\n"""
+
     issues = sonar_data.get('issues', [])
     if not issues:
         prompt += "No issues found.\n"
@@ -53,8 +62,10 @@ def build_prompt(sonar_data, trivy_data, depcheck_text):
         if count >= 10:
             break
 
+    prompt += "\nDependency-Check Vulnerabilities:\n"
     prompt += depcheck_text
-    prompt += "\n\nPlease provide concise, prioritized mitigation strategies and development best practices."
+
+    prompt += "\n\nPlease respond in the format described above with clear and tool-specific recommendations."
     return prompt
 
 def main():
@@ -67,12 +78,10 @@ def main():
     depcheck_file = sys.argv[3]
     openai_api_key = sys.argv[4]
 
-    # Load data
     sonar_data = load_json(sonar_file)
     trivy_data = load_json(trivy_file)
     depcheck_text = parse_dependency_check_xml(depcheck_file)
 
-    # Build prompt and call OpenAI
     prompt = build_prompt(sonar_data, trivy_data, depcheck_text)
 
     client = OpenAI(api_key=openai_api_key)
