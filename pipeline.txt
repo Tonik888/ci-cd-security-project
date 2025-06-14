@@ -1,98 +1,149 @@
-pipeline{
+pipeline {
     agent any
-    tools{
+
+    tools {
         jdk 'jdk17'
         nodejs 'node16'
     }
+
     environment {
-        SCANNER_HOME=tool 'sonar-scanner'
+        SCANNER_HOME = tool 'sonar-scanner'
+        SONAR_AUTH_TOKEN = credentials('Sonar-token')
+        SONAR_SERVER_URL = 'http://54.211.29.160:9000'
+        OPENAI_API_KEY = credentials('openai-api-key')
+        TMDB_V3_API_KEY = credentials('tmdb_api_key')
     }
+
     stages {
-        stage('clean workspace'){
-            steps{
+        stage('Clean Workspace') {
+            steps {
                 cleanWs()
             }
         }
-        stage('Checkout from Git'){
-            steps{
-                git branch: 'main', url: 'https://github.com/Aj7Ay/Netflix-clone.git'
+
+        stage('Checkout from Git') {
+            steps {
+                git branch: 'main', url: 'https://github.com/Tonik888/ci-cd-security-project.git'
             }
         }
-        stage("Sonarqube Analysis "){
-            steps{
+
+        stage('SonarQube Analysis') {
+            steps {
                 withSonarQubeEnv('sonar-server') {
-                    sh ''' $SCANNER_HOME/bin/sonar-scanner -Dsonar.projectName=Netflix \
-                    -Dsonar.projectKey=Netflix '''
+                    sh """
+                    $SCANNER_HOME/bin/sonar-scanner \
+                      -Dsonar.projectKey=CI-CD-Secure-Pipeline \
+                      -Dsonar.projectName=CI-CD-Secure-Pipeline \
+                      -Dsonar.projectVersion=${env.BUILD_NUMBER} \
+                      -Dsonar.sources=. \
+                      -Dsonar.login=${SONAR_AUTH_TOKEN}
+                    """
                 }
             }
         }
-        stage("quality gate"){
-           steps {
-                script {
-                    waitForQualityGate abortPipeline: false, credentialsId: 'Sonar-token' 
+
+        stage('Quality Gate') {
+            steps {
+                timeout(time: 10, unit: 'MINUTES') {
+                    waitForQualityGate abortPipeline: true
                 }
-            } 
+            }
         }
+
+        stage('Download SonarQube JSON Report') {
+            steps {
+                script {
+                    def sonarProjectKey = "CI-CD-Secure-Pipeline"
+                    def sonarApiUrl = "${env.SONAR_SERVER_URL}/api/issues/search?componentKeys=${sonarProjectKey}&ps=500&resolved=false&types=CODE_SMELL,BUG,VULNERABILITY"
+                    echo "Downloading SonarQube issues JSON from: ${sonarApiUrl}"
+                    sh "curl -v -u ${SONAR_AUTH_TOKEN}: '${sonarApiUrl}' -o sonar-report.json"
+                    archiveArtifacts artifacts: 'sonar-report.json'
+                }
+            }
+        }
+
         stage('Install Dependencies') {
             steps {
-                sh "npm install"
+                sh 'npm install'
             }
         }
-        stage('OWASP FS SCAN') {
+
+        stage('OWASP Dependency-Check Scan') {
             steps {
                 dependencyCheck additionalArguments: '--scan ./ --disableYarnAudit --disableNodeAudit', odcInstallation: 'DP-Check'
                 dependencyCheckPublisher pattern: '**/dependency-check-report.xml'
+                archiveArtifacts artifacts: 'dependency-check-report.xml'
             }
         }
+
         stage('TRIVY FS SCAN') {
             steps {
-                sh "trivy fs . > trivyfs.txt"
+                sh "trivy fs --format json -o trivy-report.json ."
+                archiveArtifacts artifacts: 'trivy-report.json'
             }
         }
-        stage("Docker Build & Push"){
-            steps{
-                script{
-                   withDockerRegistry(credentialsId: 'docker', toolName: 'docker'){   
-                       sh "docker build --build-arg TMDB_V3_API_KEY=<yourtmdbapikey> -t netflix ."
-                       sh "docker tag netflix nasi101/netflix:latest "
-                       sh "docker push nasi101/netflix:latest "
-                    }
-                }
+
+        stage('Parse JSON Reports') {
+            steps {
+                sh 'python3 scripts/parse_sonarqube.py sonar-report.json > sonar-summary.txt'
+                sh 'python3 scripts/parse_dependencycheck.py dependency-check-report.xml > dependencycheck-summary.txt'
+                sh 'python3 scripts/parse_trivy.py trivy-report.json > trivy-summary.txt'
+                archiveArtifacts artifacts: 'sonar-summary.txt, dependencycheck-summary.txt, trivy-summary.txt'
             }
         }
-        stage("TRIVY"){
-            steps{
-                sh "trivy image nasi101/netflix:latest > trivyimage.txt" 
+
+        stage('AI-Powered Recommendations') {
+            steps {
+                sh '''
+                    python3 -m venv openai-env
+                    . openai-env/bin/activate
+                    pip install --upgrade pip 
+                    pip install openai
+
+                    python3 scripts/generate_openai_recommendations.py sonar-report.json trivy-report.json dependency-check-report.xml "$OPENAI_API_KEY" > ai-recommendations.txt
+                '''
+                archiveArtifacts artifacts: 'ai-recommendations.txt'
+                echo readFile('ai-recommendations.txt')
             }
         }
-        stage('Deploy to container'){
-            steps{
-                sh 'docker run -d -p 8081:80 nasi101/netflix:latest'
-            }
-        }
-        stage('Deploy to kubernets'){
-            steps{
-                script{
-                    dir('Kubernetes') {
-                        withKubeConfig(caCertificate: '', clusterName: '', contextName: '', credentialsId: 'k8s', namespace: '', restrictKubeConfigAccess: false, serverUrl: '') {
-                                sh 'kubectl apply -f deployment.yml'
-                                sh 'kubectl apply -f service.yml'
-                        }   
+
+        stage('Docker Build & Push') {
+            steps {
+                script {
+                    withDockerRegistry(credentialsId: 'docker', toolName: 'docker') {
+                        sh """
+                            docker build --build-arg TMDB_V3_API_KEY=${TMDB_V3_API_KEY} -t netflix-3 .
+                            docker tag netflix-3 tonik888/netflix-3:latest
+                            docker push tonik888/netflix-3:latest
+                        """
                     }
                 }
             }
         }
 
+	stage("TRIVY image scanner"){
+            steps{
+                sh "trivy image tonik888/netflix-3:latest > trivyimage.txt" 
+            }
+        }
+
+        stage('Deploy to container') {
+            steps {
+                sh 'docker run -d --name netflix-3 -p 8081:80 tonik888/netflix-3:latest'
+            }
+        }
     }
+
     post {
-     always {
-        emailext attachLog: true,
-            subject: "'${currentBuild.result}'",
-            body: "Project: ${env.JOB_NAME}<br/>" +
-                "Build Number: ${env.BUILD_NUMBER}<br/>" +
-                "URL: ${env.BUILD_URL}<br/>",
-            to: 'iambatmanthegoat@gmail.com',                                #change mail here
-            attachmentsPattern: 'trivyfs.txt,trivyimage.txt'
+        always {
+            emailext attachLog: true,
+                subject: "'${currentBuild.result}' - Build #${env.BUILD_NUMBER}",
+                body: """
+                <p>Project: ${env.JOB_NAME}</p>
+                <p>Build Number: ${env.BUILD_NUMBER}</p>
+                <p>Build URL: <a href="${env.BUILD_URL}">${env.BUILD_URL}</a></p>
+                """,
+                to: 'aziz007rah@gmail.com'
         }
     }
 }
